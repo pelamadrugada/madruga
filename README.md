@@ -47,6 +47,30 @@ pelo ONNX Runtime. São ~60 MB de dependência em vez de ~2,5 GB.
 A rede amplia por 4×. Para chegar aos 5× pedidos, o passo restante (1,25×) é
 interpolação comum — o ganho de reconstrução vem todo do 4×.
 
+### `--ai-denoise`
+
+O Real-ESRGAN publica dois modelos irmãos: o normal, que preserva textura (e
+o ruído junto), e o `wdn`, treinado para limpar (e que de quebra come textura
+fina). `--ai-denoise` mistura os **pesos** das duas redes — a técnica DNI do
+`inference_realesrgan.py` oficial — dando um controle contínuo sem custo de
+processamento:
+
+| valor | resultado                                        |
+|-------|--------------------------------------------------|
+| `1`   | preserva o máximo de textura, e o ruído junto    |
+| `0.5` | equilíbrio (**padrão**)                          |
+| `0`   | limpeza máxima, textura fina mais lisa           |
+
+Cada valor gera um `.onnx` próprio no cache, na primeira vez que é usado.
+
+### Créditos
+
+O modo de IA usa os modelos e a técnica do
+[Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (BSD-3), de Xintao Wang
+e colaboradores. Deste projeto vieram também o pré-padding de borda e o DNI;
+a execução aqui é própria (ONNX em vez de PyTorch). A detecção de rosto usa o
+[YuNet](https://github.com/opencv/opencv_zoo), do OpenCV Zoo.
+
 ## Instalação
 
 ```bash

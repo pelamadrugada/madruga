@@ -1,3 +1,5 @@
+import os
+
 import cv2
 import numpy as np
 import pytest
@@ -184,3 +186,52 @@ def test_pipeline_com_ia_de_verdade(modelo_ia, tmp_path):
     # Fora do rosto: a IA precisa ter mudado alguma coisa de verdade.
     fundo = np.abs(saida[:200, :200].astype(int) - referencia[:200, :200].astype(int))
     assert fundo.mean() > 1.0
+
+
+def test_blend_weights_interpola():
+    a = {"x": np.zeros((2, 2), np.float32)}
+    b = {"x": np.ones((2, 2), np.float32)}
+
+    np.testing.assert_allclose(superres.blend_weights(a, b, 1.0)["x"], a["x"])
+    np.testing.assert_allclose(superres.blend_weights(a, b, 0.0)["x"], b["x"])
+    np.testing.assert_allclose(superres.blend_weights(a, b, 0.25)["x"], np.full((2, 2), 0.75))
+
+
+def test_blend_weights_exige_mesmos_tensores():
+    with pytest.raises(superres.SuperResUnavailable):
+        superres.blend_weights({"x": np.zeros(1, np.float32)}, {"y": np.zeros(1, np.float32)}, 0.5)
+
+
+def test_border_pad_nao_muda_o_tamanho(tmp_path):
+    pesos = _pesos_sinteticos(escala=2)
+    onnx_path = superres.build_onnx(pesos, str(tmp_path / "m.onnx"), scale=2)
+    imagem = np.random.default_rng(7).random((30, 24, 3)).astype(np.float32)
+
+    com = superres.SuperResolver(onnx_path, scale=2, tile=256, border_pad=10).upscale(imagem)
+    sem = superres.SuperResolver(onnx_path, scale=2, tile=256, border_pad=0).upscale(imagem)
+
+    assert com.shape == sem.shape == (60, 48, 3)
+    # O miolo nao muda; so a faixa da borda e que era artificial.
+    np.testing.assert_allclose(com[24:-24, 24:-24], sem[24:-24, 24:-24], atol=1e-5)
+    assert not np.allclose(com[:4], sem[:4], atol=1e-5)
+
+
+def test_denoise_muda_o_resultado(modelo_ia, tmp_path, monkeypatch):
+    """A mistura de pesos precisa produzir uma rede de fato diferente."""
+    from nitido import models
+
+    wdn = os.path.join(os.path.dirname(modelo_ia), "realesr-wdn.pth")
+    if not os.path.exists(wdn):
+        pytest.skip("modelo wdn nao disponivel")
+
+    pesos = superres.read_pth(modelo_ia)
+    misturado = superres.blend_weights(pesos, superres.read_pth(wdn), 0.0)
+
+    a = superres.SuperResolver(
+        superres.build_onnx(pesos, str(tmp_path / "a.onnx"), 4), scale=4, tile=256
+    )
+    b = superres.SuperResolver(
+        superres.build_onnx(misturado, str(tmp_path / "b.onnx"), 4), scale=4, tile=256
+    )
+    ruidosa = np.random.default_rng(2).random((48, 48, 3)).astype(np.float32)
+    assert not np.allclose(a.upscale(ruidosa), b.upscale(ruidosa), atol=1e-3)

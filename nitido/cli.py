@@ -63,6 +63,21 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--ai-tile", type=int, default=384, help="lado do bloco processado pela rede")
     g.add_argument("--ai-overlap", type=int, default=40, help="sobreposicao entre blocos da rede")
     g.add_argument("--ai-threads", type=int, default=0, help="threads da rede (0 = automatico)")
+    g.add_argument(
+        "--ai-denoise",
+        type=float,
+        default=0.5,
+        help=(
+            "0 a 1: 1 preserva textura (e o ruido junto), 0 limpa ao maximo. "
+            "Mistura os pesos do modelo normal com o irmao 'wdn' (padrao: 0.5)"
+        ),
+    )
+    g.add_argument(
+        "--ai-border-pad",
+        type=int,
+        default=10,
+        help="pixels espelhados na borda antes da rede, contra faixa artificial",
+    )
 
     g = p.add_argument_group("ampliacao")
     g.add_argument("-s", "--scale", type=float, default=5.0, help="fator de ampliacao (padrao: 5)")
@@ -188,6 +203,8 @@ def config_from_args(args: argparse.Namespace) -> EnhanceConfig:
         ai_tile=args.ai_tile,
         ai_overlap=args.ai_overlap,
         ai_threads=args.ai_threads,
+        ai_denoise=args.ai_denoise,
+        ai_border_pad=args.ai_border_pad,
         ai_allow_download=not args.no_download,
         deblur_method=args.deblur,
         deblur_strength=args.deblur_strength,

@@ -43,6 +43,16 @@ SR_URL = (
     "v0.2.5.0/realesr-general-x4v3.pth"
 )
 SR_SHA256 = "8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292"
+
+# Modelo irmao, treinado para remover ruido. Misturar os pesos dos dois da um
+# controle continuo de "quanto limpar" (--ai-denoise); e a tecnica DNI usada
+# pelo inference_realesrgan.py oficial.
+SR_WDN_FILENAME = "realesr-general-wdn-x4v3.pth"
+SR_WDN_URL = (
+    "https://github.com/xinntao/Real-ESRGAN/releases/download/"
+    "v0.2.5.0/realesr-general-wdn-x4v3.pth"
+)
+SR_WDN_SHA256 = "1641f8c4464b9f097c9fdda5589273713f67cf59f3d909e0bd688f0cee269dca"
 SR_SCALE = 4
 
 ENV_SR_MODEL = "NITIDO_SR_MODEL"
@@ -66,6 +76,10 @@ def cached_model_path() -> str:
 
 def cached_superres_path() -> str:
     return os.path.join(cache_dir(), SR_FILENAME)
+
+
+def cached_superres_wdn_path() -> str:
+    return os.path.join(cache_dir(), SR_WDN_FILENAME)
 
 
 def sha256(path: str) -> str:
@@ -133,8 +147,19 @@ def download_superres(destination: Optional[str] = None, timeout: float = 120.0)
     )
 
 
+def download_superres_wdn(destination: Optional[str] = None, timeout: float = 120.0) -> str:
+    """Baixa o modelo irmao de denoise usado pelo --ai-denoise."""
+    return _baixar(
+        SR_WDN_URL,
+        SR_WDN_SHA256,
+        destination or cached_superres_wdn_path(),
+        f"Baixe {SR_WDN_URL}, ou rode com --ai-denoise 1 (sem mistura).",
+        timeout,
+    )
+
+
 def resolve_superres_model(
-    explicit: Optional[str] = None, allow_download: bool = True
+    explicit: Optional[str] = None, allow_download: bool = True, denoise: float = 1.0
 ) -> Optional[str]:
     """Devolve o caminho do ``.onnx`` pronto para uso, ou ``None``.
 
@@ -144,15 +169,20 @@ def resolve_superres_model(
     """
     from .superres import prepare  # importacao tardia: so o modo de IA precisa
 
+    denoise = float(min(max(denoise, 0.0), 1.0))
+    sufixo = "" if denoise >= 1.0 else f"-dn{int(round(denoise * 100)):02d}"
+    onnx_nome = SR_ONNX_FILENAME.replace(".onnx", f"{sufixo}.onnx")
+
     origem = explicit or os.environ.get(ENV_SR_MODEL)
     if origem:
         if not os.path.exists(origem):
             raise ModelUnavailable(f"modelo de IA nao encontrado: {origem}")
         if origem.endswith(".onnx"):
             return origem
-        return prepare(origem, os.path.join(cache_dir(), SR_ONNX_FILENAME), SR_SCALE)
+        wdn = _wdn_para(origem, allow_download) if denoise < 1.0 else None
+        return prepare(origem, os.path.join(cache_dir(), onnx_nome), SR_SCALE, wdn, denoise)
 
-    onnx_cache = os.path.join(cache_dir(), SR_ONNX_FILENAME)
+    onnx_cache = os.path.join(cache_dir(), onnx_nome)
     if os.path.exists(onnx_cache):
         return onnx_cache
 
@@ -161,7 +191,24 @@ def resolve_superres_model(
         if not allow_download:
             return None
         download_superres(pth_cache)
-    return prepare(pth_cache, onnx_cache, SR_SCALE)
+
+    wdn = _wdn_para(pth_cache, allow_download) if denoise < 1.0 else None
+    return prepare(pth_cache, onnx_cache, SR_SCALE, wdn, denoise)
+
+
+def _wdn_para(principal: str, allow_download: bool) -> Optional[str]:
+    """Acha o modelo de denoise irmao do modelo principal."""
+    vizinho = principal.replace("realesr-general-x4v3", "realesr-general-wdn-x4v3")
+    if vizinho != principal and os.path.exists(vizinho):
+        return vizinho
+    cached = cached_superres_wdn_path()
+    if os.path.exists(cached):
+        return cached
+    if not allow_download:
+        raise ModelUnavailable(
+            "--ai-denoise abaixo de 1 precisa do modelo wdn, e o download esta desabilitado"
+        )
+    return download_superres_wdn(cached)
 
 
 def resolve_model(explicit: Optional[str] = None, allow_download: bool = True) -> Optional[str]:

@@ -55,6 +55,8 @@ class EnhanceConfig:
     ai_tile: int = 384
     ai_overlap: int = 40
     ai_threads: int = 0
+    ai_denoise: float = 0.5  # 1 = preserva textura e ruido; 0 = limpa ao maximo
+    ai_border_pad: int = 10
     ai_allow_download: bool = True
 
     # Remocao de motion blur
@@ -145,13 +147,20 @@ def build_resolver(cfg: EnhanceConfig, quiet: bool = True):
     from .superres import SuperResUnavailable, SuperResolver
 
     try:
-        caminho = resolve_superres_model(cfg.ai_model, allow_download=cfg.ai_allow_download)
+        caminho = resolve_superres_model(
+            cfg.ai_model, allow_download=cfg.ai_allow_download, denoise=cfg.ai_denoise
+        )
         if caminho is None:
             raise ModelUnavailable(
                 "modelo de super-resolucao nao encontrado e download desabilitado"
             )
         return SuperResolver(
-            caminho, scale=4, tile=cfg.ai_tile, overlap=cfg.ai_overlap, threads=cfg.ai_threads
+            caminho,
+            scale=4,
+            tile=cfg.ai_tile,
+            overlap=cfg.ai_overlap,
+            threads=cfg.ai_threads,
+            border_pad=cfg.ai_border_pad,
         )
     except (ModelUnavailable, SuperResUnavailable):
         if cfg.engine == "ai":

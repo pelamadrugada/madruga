@@ -90,6 +90,24 @@ def read_pth(path: str) -> Dict[str, np.ndarray]:
     return loaded
 
 
+def blend_weights(
+    a: Dict[str, np.ndarray], b: Dict[str, np.ndarray], peso_a: float
+) -> Dict[str, np.ndarray]:
+    """Interpola dois conjuntos de pesos (a tecnica "DNI" do Real-ESRGAN).
+
+    O Real-ESRGAN publica dois modelos irmaos: o normal, que preserva
+    textura (e ruido junto), e o "wdn", treinado para remover ruido (e que
+    de quebra remove textura fina). Misturar os *pesos* das duas redes da um
+    controle continuo entre os dois comportamentos, sem rodar as duas.
+
+    ``peso_a = 1`` devolve o modelo normal, ``0`` devolve o wdn.
+    """
+    if set(a) != set(b):
+        raise SuperResUnavailable("os dois modelos precisam ter os mesmos tensores")
+    peso_a = float(np.clip(peso_a, 0.0, 1.0))
+    return {k: (a[k] * peso_a + b[k] * (1.0 - peso_a)).astype(np.float32) for k in a}
+
+
 def build_onnx(weights: Dict[str, np.ndarray], destination: str, scale: int = 4) -> str:
     """Monta o grafo ONNX do SRVGGNetCompact a partir dos pesos e grava."""
     try:
@@ -189,6 +207,7 @@ class SuperResolver:
         tile: int = 256,
         overlap: int = 16,
         threads: int = 0,
+        border_pad: int = 10,
     ) -> None:
         try:
             import onnxruntime as ort
@@ -207,6 +226,10 @@ class SuperResolver:
         self.scale = scale
         self.tile = max(64, tile)
         self.overlap = max(4, overlap)
+        # Nas bordas da imagem a rede nao tem vizinhanca para olhar e deixa
+        # uma faixa artificial. Espelhar alguns pixels antes resolve — e o
+        # "pre_pad" do inference_realesrgan.py oficial.
+        self.border_pad = max(0, border_pad)
 
     def _run(self, bgr: np.ndarray) -> np.ndarray:
         rgb = bgr[:, :, ::-1]
@@ -220,6 +243,16 @@ class SuperResolver:
         Blocos com sobreposicao mantem a memoria sob controle; so o miolo de
         cada bloco e aproveitado, entao nao aparece emenda.
         """
+        if self.border_pad:
+            p = self.border_pad
+            miolo = self._upscale_tiles(
+                cv2.copyMakeBorder(bgr, p, p, p, p, cv2.BORDER_REFLECT_101)
+            )
+            s = self.scale
+            return miolo[p * s : -p * s, p * s : -p * s]
+        return self._upscale_tiles(bgr)
+
+    def _upscale_tiles(self, bgr: np.ndarray) -> np.ndarray:
         h, w = bgr.shape[:2]
         s = self.scale
         out = np.empty((h * s, w * s, 3), np.float32)
@@ -240,8 +273,21 @@ class SuperResolver:
         return np.clip(out, 0.0, 1.0)
 
 
-def prepare(pth_path: str, onnx_path: str, scale: int = 4) -> str:
-    """Converte o ``.pth`` em ``.onnx`` (uma vez) e devolve o caminho."""
+def prepare(
+    pth_path: str,
+    onnx_path: str,
+    scale: int = 4,
+    wdn_path: Optional[str] = None,
+    denoise: float = 1.0,
+) -> str:
+    """Converte o ``.pth`` em ``.onnx`` (uma vez) e devolve o caminho.
+
+    Com ``wdn_path``, os pesos dos dois modelos sao misturados antes: e o
+    controle de denoise descrito em :func:`blend_weights`.
+    """
     if os.path.exists(onnx_path):
         return onnx_path
-    return build_onnx(read_pth(pth_path), onnx_path, scale=scale)
+    pesos = read_pth(pth_path)
+    if wdn_path and denoise < 1.0:
+        pesos = blend_weights(pesos, read_pth(wdn_path), denoise)
+    return build_onnx(pesos, onnx_path, scale=scale)
