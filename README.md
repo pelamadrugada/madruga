@@ -156,3 +156,14 @@ nitido/enhance.py   contraste local, unsharp, redimensionamento
 nitido/pipeline.py  orquestração (imagem e vídeo)
 nitido/cli.py       linha de comando
 ```
+
+## Atalho
+
+Se não quiser mexer em venv, use o script — ele prepara tudo na primeira vez:
+
+```bash
+./rodar.sh foto.jpg                  # grava foto_5x.jpg ao lado
+./rodar.sh foto.jpg -o grande.png
+./rodar.sh pasta/ -o saida/
+./rodar.sh clipe.mp4 -o clipe_5x.mp4
+```
