@@ -21,7 +21,7 @@ def _scene(size=200, seed=7):
 
 
 def _cfg(**kw):
-    base = dict(scale=5.0, band_height=64)
+    base = dict(scale=5.0, band_height=64, engine="classic")
     base.update(kw)
     return EnhanceConfig(**base)
 

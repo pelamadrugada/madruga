@@ -16,6 +16,7 @@ from .pipeline import (
     EnhanceConfig,
     Report,
     build_detector,
+    build_resolver,
     is_video,
     process_image_file,
     process_video_file,
@@ -46,6 +47,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("input", help="imagem, video ou pasta de entrada")
     p.add_argument("-o", "--output", help="arquivo ou pasta de saida")
     p.add_argument("--version", action="version", version=f"nitido {__version__}")
+
+    g = p.add_argument_group("motor")
+    g.add_argument(
+        "--engine",
+        default="auto",
+        choices=("auto", "ai", "classic"),
+        help=(
+            "ai: reconstroi pixel com rede neural (Real-ESRGAN); "
+            "classic: so interpola, sem IA; "
+            "auto (padrao): usa a IA quando disponivel, senao avisa e cai no classic"
+        ),
+    )
+    g.add_argument("--ai-model", help="caminho de um realesr-general-x4v3 (.pth ou .onnx)")
+    g.add_argument("--ai-tile", type=int, default=384, help="lado do bloco processado pela rede")
+    g.add_argument("--ai-overlap", type=int, default=40, help="sobreposicao entre blocos da rede")
+    g.add_argument("--ai-threads", type=int, default=0, help="threads da rede (0 = automatico)")
 
     g = p.add_argument_group("ampliacao")
     g.add_argument("-s", "--scale", type=float, default=5.0, help="fator de ampliacao (padrao: 5)")
@@ -91,9 +108,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("detalhe (fora do rosto)")
     g.add_argument("--denoise", type=float, default=0.0, help="0 a 1: reducao de ruido previa")
-    g.add_argument("--clahe", type=float, default=1.6, help="contraste local; 0 desliga")
+    g.add_argument(
+        "--clahe",
+        type=float,
+        default=None,
+        help="contraste local; 0 desliga (padrao: 1.6 no classic, 0 no modo de IA)",
+    )
     g.add_argument("--clahe-grid", type=int, default=8, help="tamanho da grade do CLAHE")
-    g.add_argument("--sharpen", type=float, default=0.7, help="intensidade da mascara de nitidez")
+    g.add_argument(
+        "--sharpen",
+        type=float,
+        default=None,
+        help="intensidade da nitidez (padrao: 0.7 no classic, 0 no modo de IA)",
+    )
     g.add_argument("--sharpen-sigma", type=float, default=1.6, help="raio da nitidez, em px da saida")
     g.add_argument(
         "--sharpen-threshold",
@@ -146,9 +173,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> EnhanceConfig:
+    # A rede ja devolve a imagem nitida. Repetir CLAHE e unsharp por cima so
+    # deixa o resultado duro, entao no modo de IA esses realces saem de fabrica
+    # desligados — a menos que o usuario peca.
+    com_ia = args.engine in ("ai", "auto")
+    clahe = args.clahe if args.clahe is not None else (0.0 if com_ia else 1.6)
+    sharpen = args.sharpen if args.sharpen is not None else (0.0 if com_ia else 0.7)
+
     cfg = EnhanceConfig(
         scale=args.scale,
         interpolation=args.interp,
+        engine=args.engine,
+        ai_model=args.ai_model,
+        ai_tile=args.ai_tile,
+        ai_overlap=args.ai_overlap,
+        ai_threads=args.ai_threads,
+        ai_allow_download=not args.no_download,
         deblur_method=args.deblur,
         deblur_strength=args.deblur_strength,
         deblur_noise=args.deblur_noise,
@@ -156,10 +196,10 @@ def config_from_args(args: argparse.Namespace) -> EnhanceConfig:
         deblur_min_confidence=args.deblur_min_confidence,
         deblur_max_length=args.deblur_max_length,
         denoise=args.denoise,
-        clahe_clip=args.clahe,
+        clahe_clip=clahe,
         clahe_grid=args.clahe_grid,
         sharpen_sigma=args.sharpen_sigma,
-        sharpen_amount=args.sharpen,
+        sharpen_amount=sharpen,
         sharpen_threshold=args.sharpen_threshold,
         face_mode=args.face_mode,
         face_expand=args.face_expand,
@@ -203,7 +243,11 @@ def _collect_inputs(path: str) -> List[str]:
 def _describe(report: Report) -> str:
     w, h = report.input_size
     ow, oh = report.output_size
-    parts = [f"{w}x{h} -> {ow}x{oh}", f"{report.faces} rosto(s)"]
+    parts = [
+        f"{w}x{h} -> {ow}x{oh}",
+        "IA" if report.engine == "ai" else "classic",
+        f"{report.faces} rosto(s)",
+    ]
     if report.deblur_applied:
         parts.append(
             f"borrao {report.blur_length:.1f}px @ {report.blur_angle:.0f}deg "
@@ -246,6 +290,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"erro: {exc}", file=sys.stderr)
             return 2
 
+    resolver = None
+    if cfg.engine != "classic":
+        try:
+            resolver = build_resolver(cfg)
+        except RuntimeError as exc:
+            print(f"erro: {exc}", file=sys.stderr)
+            return 2
+        if resolver is None and not args.quiet:
+            print(
+                "aviso: modelo de IA indisponivel, usando ampliacao classica "
+                "(interpolacao, sem reconstruir detalhe)",
+                file=sys.stderr,
+            )
+
     failures = 0
     for src in inputs:
         dst = (
@@ -280,7 +338,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         "Audio nao e copiado — veja o README."
                     )
             else:
-                report = process_image_file(src, dst, cfg, args.quality, detector=detector)
+                report = process_image_file(
+                    src, dst, cfg, args.quality, detector=detector, resolver=resolver
+                )
                 if not args.quiet:
                     print(f"[imagem] {src} -> {dst}\n  {_describe(report)}")
         except (IOError, MemoryError, ValueError) as exc:

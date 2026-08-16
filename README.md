@@ -1,19 +1,51 @@
 # nitido
 
-Amplia imagens e vídeos em **5×**, tira o **motion blur** e aumenta o detalhe
-de tudo ao redor — **sem alterar o rosto**.
+Amplia imagens e vídeos em **5×** reconstruindo pixel com rede neural
+(Real-ESRGAN), tira o **motion blur** e aumenta o detalhe de tudo ao redor —
+**sem alterar o rosto**.
 
 O rosto é detectado, protegido por uma máscara suave e apenas
-*redimensionado*: nenhuma deconvolução, nenhum contraste local e nenhuma
-nitidez artificial encostam nele. Todo o resto do quadro passa pelo
-tratamento completo. A emenda entre as duas partes é gradual, então não
-aparece costura.
+*redimensionado*: a rede não chega nele, nem a deconvolução, nem o contraste
+local, nem a nitidez artificial. Todo o resto do quadro passa pelo tratamento
+completo. A emenda entre as duas partes é gradual, então não aparece costura.
 
-```
-FUNDO (pena do chapéu)          ROSTO (olho)
-Lanczos 5x  →  nitido 5x        Lanczos 5x  →  nitido 5x
-  borrado      com textura        idêntico     idêntico
-```
+## Interpolar não é reconstruir
+
+Vale ser explícito sobre a diferença, porque é a razão de existir do modo de
+IA:
+
+* **Ampliação clássica** (Lanczos, bicúbica) redistribui os pixels que já
+  existem. Aumenta o tamanho do arquivo; no zoom, continua a mesma foto ruim.
+  Máscara de nitidez acentua o que está lá — inclusive o ruído.
+* **Super-resolução por rede** (`--engine ai`) *inventa* detalhe plausível a
+  partir do que a rede aprendeu em milhões de pares (imagem boa, imagem
+  degradada). É o que reconstrói textura de tijolo, fio de cabelo e trama de
+  tecido que a foto original não registrou.
+
+O segundo ponto merece atenção: a rede produz um detalhe **plausível**, não o
+detalhe verdadeiro que a câmera não capturou. Num rosto isso significa que
+traços podem mudar sutilmente — é exatamente por isso que o padrão é não
+deixá-la tocar em rosto nenhum.
+
+## Motores
+
+| `--engine`  | o que faz                                                        |
+|-------------|------------------------------------------------------------------|
+| `auto`      | usa a IA quando disponível, senão avisa e cai no clássico (**padrão**) |
+| `ai`        | exige a IA; se o modelo faltar, é erro                           |
+| `classic`   | só interpolação, sem rede neural                                 |
+
+No modo de IA o CLAHE e a máscara de nitidez saem **desligados** de fábrica:
+a rede já entrega a imagem nítida, e realçar por cima deixa o resultado duro.
+Ainda dá para ligá-los com `--clahe` e `--sharpen`.
+
+O modelo (`realesr-general-x4v3`, ~4,9 MB) é baixado uma vez para
+`~/.cache/nitido/`. Ele vem no formato do PyTorch, mas o nitido **não usa
+PyTorch**: lê os pesos direto do arquivo e monta um grafo ONNX, executado
+pelo ONNX Runtime. São ~60 MB de dependência em vez de ~2,5 GB.
+
+A rede amplia por 4×. Para chegar aos 5× pedidos, o passo restante (1,25×) é
+interpolação comum — o ganho de reconstrução vem todo do 4×.
 
 ## Instalação
 
@@ -68,12 +100,16 @@ em teste (`test_rosto_fica_igual_ao_simples_redimensionamento`).
 
 Se preferir outro comportamento:
 
-| `--face-mode` | o que acontece com o rosto                         |
-|---------------|----------------------------------------------------|
-| `preserve`    | só redimensionado (**padrão**)                     |
-| `gentle`      | recebe a remoção de motion blur, mas não o realce  |
-| `enhance`     | tratado como o resto do quadro                     |
-| `off`         | nem detecta rosto (mais rápido, sem proteção)      |
+| `--face-mode` | o que acontece com o rosto                              |
+|---------------|---------------------------------------------------------|
+| `preserve`    | só redimensionado (**padrão**)                          |
+| `gentle`      | recebe a remoção de motion blur, mas não o realce       |
+| `enhance`     | tratado como o resto — a IA reconstrói o rosto também   |
+| `off`         | nem detecta rosto (mais rápido, sem proteção)           |
+
+Com a IA ligada e o rosto protegido, o rosto fica visivelmente mais macio que
+o entorno reconstruído. É a consequência direta de pedir as duas coisas ao
+mesmo tempo; quem preferir a foto uniforme usa `--face-mode enhance`.
 
 ## Como o motion blur é removido
 
@@ -149,6 +185,7 @@ NITIDO_TEST_FACE_IMAGE=retrato.jpg \
 ## Estrutura
 
 ```
+nitido/superres.py  super-resolução por rede neural (lê .pth, roda em ONNX)
 nitido/faces.py     detecção de rostos e máscara de proteção
 nitido/models.py    resolução/download do modelo YuNet
 nitido/deblur.py    estimativa do borrão e deconvolução

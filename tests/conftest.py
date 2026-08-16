@@ -16,11 +16,23 @@ def cache_isolado(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(models.ENV_CACHE, str(tmp_path_factory.mktemp("cache")))
     monkeypatch.delenv(models.ENV_MODEL, raising=False)
 
+    monkeypatch.delenv(models.ENV_SR_MODEL, raising=False)
+
     def sem_rede(*_args, **_kwargs):
         raise models.ModelUnavailable("download desabilitado durante os testes")
 
     monkeypatch.setattr(models, "download_model", sem_rede)
+    monkeypatch.setattr(models, "download_superres", sem_rede)
     yield
+
+
+@pytest.fixture
+def modelo_ia():
+    """Caminho de um Real-ESRGAN real, se houver; senao pula o teste."""
+    path = os.environ.get("NITIDO_TEST_SR_MODEL")
+    if not path or not os.path.exists(path):
+        pytest.skip("defina NITIDO_TEST_SR_MODEL para rodar os testes de super-resolucao")
+    return path
 
 
 @pytest.fixture

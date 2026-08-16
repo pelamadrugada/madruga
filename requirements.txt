@@ -1,2 +1,6 @@
 numpy>=1.22
 opencv-python-headless>=4.8
+# Modo de IA (super-resolucao Real-ESRGAN). Sem estes dois o programa ainda
+# roda, mas so com ampliacao classica — que nao reconstroi detalhe.
+onnx>=1.14
+onnxruntime>=1.16
